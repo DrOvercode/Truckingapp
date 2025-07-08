@@ -3,18 +3,18 @@ from pydantic import BaseModel, Field, validator
 from sqlalchemy import Column, Integer, String, Boolean, create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
-import bcrypt
+from passlib.context import CryptContext
 from typing import Optional, List
 import requests
 from datetime import datetime, timedelta
 import uuid
-
 
 DATABASE_URL = "sqlite:///./test.db"
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 class UserDB(Base):
     __tablename__ = "users"
@@ -38,7 +38,6 @@ class PackageDB(Base):
     package_name = Column(String, index=True)
 
 Base.metadata.create_all(bind=engine)
-
 
 class UserCreate(BaseModel):
     username: str
@@ -67,9 +66,7 @@ class Route(BaseModel):
     traffic_conditions: Optional[str] = None
     route_type: Optional[str] = None
 
-
 app = FastAPI()
-
 
 def get_db():
     db = SessionLocal()
@@ -78,16 +75,14 @@ def get_db():
     finally:
         db.close()
 
-
 @app.post("/api/geoapify/create_user")
 def create_user(user: UserCreate, db: Session = Depends(get_db)):
-    hashed_pw = bcrypt.hashpw(user.password.encode('utf-8'), bcrypt.gensalt())
-    db_user = UserDB(username=user.username, email=user.email, password=hashed_pw.decode('utf-8'))
+    hashed_pw = pwd_context.hash(user.password)
+    db_user = UserDB(username=user.username, email=user.email, password=hashed_pw)
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
     return {"id": db_user.id, "username": db_user.username, "email": db_user.email}
-
 
 @app.post("/api/geoapify/create_company")
 def create_company(company: CompanyCreate, db: Session = Depends(get_db)):
@@ -96,7 +91,6 @@ def create_company(company: CompanyCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(db_company)
     return {"id": db_company.id, "name": db_company.name, "email": db_company.email, "number": db_company.number, "address": db_company.address}
-
 
 @app.post("/api/geoapify/add_package")
 def add_package(package: Package, db: Session = Depends(get_db)):
@@ -120,7 +114,6 @@ def remove_package(package_id: int, db: Session = Depends(get_db)):
     else:
         raise HTTPException(status_code=404, detail="Package not found")
 
-
 @app.post("/api/geoapify/fuel")
 def fuel(estimate: Fuel):
     next_refuel_time = estimate.current_time + timedelta(hours=30)
@@ -129,7 +122,6 @@ def fuel(estimate: Fuel):
         "next_refuel_time": next_refuel_time,
         "hours_until_refuel": 30
     }
-
 
 GEOAPIFY_API_KEY = "API_KEY"
 MAPMATCHING_URL = "https://api.geoapify.com/v1/mapmatching"
@@ -158,7 +150,6 @@ def get_route(start_location: str, end_location: str):
         route_type="fastest"
     )
     return route
-
 
 class Weather(BaseModel):
     hurricane: bool = False
@@ -191,5 +182,3 @@ def fetch_weather_alerts() -> Weather:
 @app.post("/api/geoapify/fetch_weather_alerts")
 def list_weather() -> Weather:
     return fetch_weather_alerts()
-
-
