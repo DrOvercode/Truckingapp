@@ -7,6 +7,10 @@ from passlib.context import CryptContext
 from typing import Optional, List
 import requests
 from datetime import datetime, timedelta
+from fastapi.staticfiles import StaticFiles
+app = FastAPI()
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 
 DATABASE_URL = "sqlite:///./test.db"
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
@@ -102,7 +106,7 @@ class Weather(BaseModel):
     wildfire: bool = False
     earthquake: bool = False
 
-app = FastAPI()
+
 
 def get_db():
     db = SessionLocal()
@@ -220,3 +224,4 @@ def fetch_weather_alerts() -> Weather:
 @app.get("/api/geoapify/fetch_weather_alerts", response_model=Weather)
 def list_weather():
     return fetch_weather_alerts()
+
