@@ -12,19 +12,13 @@ from fastapi.staticfiles import StaticFiles
 app = FastAPI()
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(
-        app, 
-        host="0.0.0.0", 
-        port=int(os.getenv("PORT", 10000)),  # ← Uses Render's PORT
-        timeout_keep_alive=120
-    )
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
 
 @app.get("/api/geoapify/health")
 def health_check():
     return {"status": "ok", "timestamp": datetime.utcnow()}
 
-# Static directory handling compatible with Render
+
 try:
     os.makedirs("static", exist_ok=True)
     open("static/.keep", "w").close()  # Create empty file to preserve directory
