@@ -8,11 +8,18 @@ from typing import Optional, List
 import requests
 from datetime import datetime, timedelta
 from fastapi.staticfiles import StaticFiles
+
 app = FastAPI()
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# Static directory handling compatible with Render
+try:
+    os.makedirs("static", exist_ok=True)
+    open("static/.keep", "w").close()  # Create empty file to preserve directory
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+except Exception as e:
+    print(f"Static directory warning: {str(e)}")
 
-DATABASE_URL = "sqlite:///./test.db"
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./test.db")
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -106,8 +113,6 @@ class Weather(BaseModel):
     wildfire: bool = False
     earthquake: bool = False
 
-
-
 def get_db():
     db = SessionLocal()
     try:
@@ -174,23 +179,31 @@ def fuel(estimate: Fuel):
         "hours_until_refuel": 30
     }
 
-GEOAPIFY_API_KEY = os.environ.get("GEOAPIFY_API_KEY")
+GEOAPIFY_API_KEY = os.environ.get("GEOAPIFY_API_KEY", "your_api_key_here")
 MAPMATCHING_URL = "https://api.geoapify.com/v1/mapmatching"
 
 @app.post("/api/geoapify/get_route", response_model=RouteOut)
 def get_route(route: RouteRequest):
+    if not GEOAPIFY_API_KEY or GEOAPIFY_API_KEY == "your_api_key_here":
+        raise HTTPException(status_code=500, detail="Geoapify API key not configured")
+    
     params = {
         "apiKey": GEOAPIFY_API_KEY,
         "waypoints": f"{route.start_location}|{route.end_location}",
         "mode": "drive"
     }
-    response = requests.get(MAPMATCHING_URL, params=params)
-    if response.status_code != 200:
-        raise HTTPException(status_code=response.status_code, detail="Error fetching route data")
-    data = response.json()
+    
+    try:
+        response = requests.get(MAPMATCHING_URL, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+    except requests.RequestException as e:
+        raise HTTPException(status_code=503, detail=f"Error connecting to Geoapify: {str(e)}")
+    
     features = data.get("features", [])
     if not features:
         raise HTTPException(status_code=404, detail="No route found")
+    
     route_info = features[0].get("properties", {})
     return RouteOut(
         start_location=route.start_location,
@@ -204,8 +217,11 @@ def get_route(route: RouteRequest):
 def fetch_weather_alerts() -> Weather:
     weather = Weather()
     try:
-        response = requests.get("https://api.weather.gov/alerts/active/NJ").json()
-        for alert in response.get("features", []):
+        response = requests.get("https://api.weather.gov/alerts/active/NJ", timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        
+        for alert in data.get("features", []):
             event = alert["properties"]["event"].lower()
             if "hurricane" in event:
                 weather.hurricane = True
@@ -218,7 +234,7 @@ def fetch_weather_alerts() -> Weather:
             elif "fire" in event or "wildfire" in event:
                 weather.wildfire = True
     except Exception as e:
-        raise HTTPException(status_code=503, detail="Weather API error: " + str(e))
+        raise HTTPException(status_code=503, detail=f"Weather API error: {str(e)}")
     return weather
 
 @app.get("/api/geoapify/fetch_weather_alerts", response_model=Weather)
