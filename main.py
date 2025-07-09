@@ -1,13 +1,12 @@
-from fastapi import FastAPI, Depends, HTTPException
-from pydantic import BaseModel, Field, validator
+import os
+from fastapi import FastAPI, Depends, HTTPException, status
+from pydantic import BaseModel, EmailStr
 from sqlalchemy import Column, Integer, String, Boolean, create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import sessionmaker, Session, declarative_base
 from passlib.context import CryptContext
 from typing import Optional, List
 import requests
 from datetime import datetime, timedelta
-import uuid
 
 DATABASE_URL = "sqlite:///./test.db"
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
@@ -41,23 +40,52 @@ Base.metadata.create_all(bind=engine)
 
 class UserCreate(BaseModel):
     username: str
-    email: str
+    email: EmailStr
+    password: str
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    email: EmailStr
+    class Config:
+        orm_mode = True
+
+class UserLogin(BaseModel):
+    username: str
     password: str
 
 class CompanyCreate(BaseModel):
     name: str
-    email: str
+    email: EmailStr
     number: int
     address: str
 
-class Package(BaseModel):
-    package_id: int
+class CompanyOut(BaseModel):
+    id: int
+    name: str
+    email: EmailStr
+    number: int
+    address: str
+    class Config:
+        orm_mode = True
+
+class PackageCreate(BaseModel):
     package_name: str
+
+class PackageOut(BaseModel):
+    id: int
+    package_name: str
+    class Config:
+        orm_mode = True
 
 class Fuel(BaseModel):
     current_time: datetime
 
-class Route(BaseModel):
+class RouteRequest(BaseModel):
+    start_location: str
+    end_location: str
+
+class RouteOut(BaseModel):
     start_location: str
     end_location: str
     waypoints: Optional[List[str]] = None
@@ -65,6 +93,14 @@ class Route(BaseModel):
     estimated_time: Optional[float] = None
     traffic_conditions: Optional[str] = None
     route_type: Optional[str] = None
+
+class Weather(BaseModel):
+    hurricane: bool = False
+    tornado: bool = False
+    snow: bool = False
+    flood: bool = False
+    wildfire: bool = False
+    earthquake: bool = False
 
 app = FastAPI()
 
@@ -75,35 +111,46 @@ def get_db():
     finally:
         db.close()
 
-@app.post("/api/geoapify/create_user")
+@app.post("/api/geoapify/create_user", response_model=UserOut)
 def create_user(user: UserCreate, db: Session = Depends(get_db)):
+    if db.query(UserDB).filter((UserDB.username == user.username) | (UserDB.email == user.email)).first():
+        raise HTTPException(status_code=400, detail="Username or email already registered")
     hashed_pw = pwd_context.hash(user.password)
     db_user = UserDB(username=user.username, email=user.email, password=hashed_pw)
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
-    return {"id": db_user.id, "username": db_user.username, "email": db_user.email}
+    return db_user
 
-@app.post("/api/geoapify/create_company")
+@app.post("/api/geoapify/login")
+def login(user: UserLogin, db: Session = Depends(get_db)):
+    db_user = db.query(UserDB).filter(UserDB.username == user.username).first()
+    if not db_user or not pwd_context.verify(user.password, db_user.password):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    return {"message": "Login successful", "user_id": db_user.id}
+
+@app.post("/api/geoapify/create_company", response_model=CompanyOut)
 def create_company(company: CompanyCreate, db: Session = Depends(get_db)):
+    if db.query(CompanyDB).filter((CompanyDB.name == company.name) | (CompanyDB.email == company.email)).first():
+        raise HTTPException(status_code=400, detail="Company name or email already registered")
     db_company = CompanyDB(name=company.name, email=company.email, number=company.number, address=company.address)
     db.add(db_company)
     db.commit()
     db.refresh(db_company)
-    return {"id": db_company.id, "name": db_company.name, "email": db_company.email, "number": db_company.number, "address": db_company.address}
+    return db_company
 
-@app.post("/api/geoapify/add_package")
-def add_package(package: Package, db: Session = Depends(get_db)):
-    new_package = PackageDB(id=package.package_id, package_name=package.package_name)
+@app.post("/api/geoapify/add_package", response_model=PackageOut)
+def add_package(package: PackageCreate, db: Session = Depends(get_db)):
+    new_package = PackageDB(package_name=package.package_name)
     db.add(new_package)
     db.commit()
     db.refresh(new_package)
-    return {"id": new_package.id, "package_name": new_package.package_name}
+    return new_package
 
-@app.get("/api/geoapify/list_packages")
+@app.get("/api/geoapify/list_packages", response_model=List[PackageOut])
 def list_packages(db: Session = Depends(get_db)):
     packages = db.query(PackageDB).all()
-    return [{"id": p.id, "package_name": p.package_name} for p in packages]
+    return packages
 
 @app.delete("/api/geoapify/remove_package/{package_id}")
 def remove_package(package_id: int, db: Session = Depends(get_db)):
@@ -123,14 +170,14 @@ def fuel(estimate: Fuel):
         "hours_until_refuel": 30
     }
 
-GEOAPIFY_API_KEY = "API_KEY"
+GEOAPIFY_API_KEY = os.environ.get("GEOAPIFY_API_KEY")
 MAPMATCHING_URL = "https://api.geoapify.com/v1/mapmatching"
 
-@app.post("/api/geoapify/get_route")
-def get_route(start_location: str, end_location: str):
+@app.post("/api/geoapify/get_route", response_model=RouteOut)
+def get_route(route: RouteRequest):
     params = {
         "apiKey": GEOAPIFY_API_KEY,
-        "waypoints": f"{start_location}|{end_location}",
+        "waypoints": f"{route.start_location}|{route.end_location}",
         "mode": "drive"
     }
     response = requests.get(MAPMATCHING_URL, params=params)
@@ -141,23 +188,14 @@ def get_route(start_location: str, end_location: str):
     if not features:
         raise HTTPException(status_code=404, detail="No route found")
     route_info = features[0].get("properties", {})
-    route = Route(
-        start_location=start_location,
-        end_location=end_location,
+    return RouteOut(
+        start_location=route.start_location,
+        end_location=route.end_location,
         distance=route_info.get("distance"),
         estimated_time=route_info.get("duration"),
         traffic_conditions=route_info.get("traffic"),
         route_type="fastest"
     )
-    return route
-
-class Weather(BaseModel):
-    hurricane: bool = False
-    tornado: bool = False
-    snow: bool = False
-    flood: bool = False
-    wildfire: bool = False
-    earthquake: bool = False
 
 def fetch_weather_alerts() -> Weather:
     weather = Weather()
@@ -176,9 +214,9 @@ def fetch_weather_alerts() -> Weather:
             elif "fire" in event or "wildfire" in event:
                 weather.wildfire = True
     except Exception as e:
-        print("Weather API error:", e)
+        raise HTTPException(status_code=503, detail="Weather API error: " + str(e))
     return weather
 
-@app.post("/api/geoapify/fetch_weather_alerts")
-def list_weather() -> Weather:
+@app.get("/api/geoapify/fetch_weather_alerts", response_model=Weather)
+def list_weather():
     return fetch_weather_alerts()
