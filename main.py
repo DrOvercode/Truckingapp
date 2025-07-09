@@ -11,6 +11,10 @@ from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
 
+@app.get("/api/geoapify/health")
+def health_check():
+    return {"status": "ok", "timestamp": datetime.utcnow()}
+
 # Static directory handling compatible with Render
 try:
     os.makedirs("static", exist_ok=True)
