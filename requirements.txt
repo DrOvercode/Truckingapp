@@ -1,9 +1,10 @@
+--prefer-binary
 fastapi==0.109.0
 uvicorn==0.27.0
 python-multipart==0.0.9
 passlib==1.7.4
 sqlalchemy==2.0.25
-pydantic==2.5.3
 requests==2.31.0
 python-jose==3.3.0
-cryptography==41.0.5  # Critical - must be this version
+cryptography==41.0.5  # MUST BE THIS VERSION
+pydantic==2.5.3
